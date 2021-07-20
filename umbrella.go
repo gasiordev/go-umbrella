@@ -14,12 +14,47 @@ type Umbrella struct {
 	goCRUDController *crud.Controller
 }
 
+type User struct {
+	ID                 int    `json:"user_id"`
+	Flags              int    `json:"flags"`
+	Name               string `json:"name" crud:"req lenmin:2 lenmax:50"`
+	Email              string `json:"email" crud:"req"`
+	Password           string `json:"password"`
+	EmailActivationKey string `json:"email_activation_key" crud:""`
+	CreatedAt          int    `json:"created_at"`
+	CreatedByUserID    int    `json:"created_by_user_id"`
+}
+
+type Session struct {
+	ID        int    `json:"session_id"`
+	Flags     int    `json:"flags"`
+	Key       string `json:"key" crud:"uniq lenmin:32 lenmax:50"`
+	ExpiresAt int    `json:"expires_at"`
+	UserID    int    `json:"user_id" crud:"req"`
+}
+
 func NewUmbrella(dbConn *sql.DB, tblPrefix string) *Umbrella {
 	u := &Umbrella{
-		dbConn:      dbConn,
-		dbTblPrefix: tblPrefix,
+		dbConn:           dbConn,
+		dbTblPrefix:      tblPrefix,
+		goCRUDController: crud.NewController(dbConn, tblPrefix),
 	}
 	return u
+}
+
+func (u Umbrella) CreateDBTables() *ErrUmbrella {
+	user := &User{}
+	session := &Session{}
+
+	err := u.goCRUDController.CreateDBTables(user, session)
+	if err != nil {
+		return &ErrUmbrella{
+			Op:  "CreateDBTables",
+			Err: err,
+		}
+	}
+
+	return nil
 }
 
 func (u Umbrella) GetHTTPHandler(uri string) http.Handler {

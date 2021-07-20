@@ -67,6 +67,10 @@ func createDocker() {
 
 func createUmbrella() {
 	testUmbrella = NewUmbrella(dbConn, "gen64_")
+	err := testUmbrella.CreateDBTables()
+	if err != nil {
+		log.Fatalf("Failed to create DB tables")
+	}
 }
 
 func getRestrictedStuffHTTPHandler() http.Handler {
