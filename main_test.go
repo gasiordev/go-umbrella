@@ -102,13 +102,13 @@ func removeDocker() {
 	dockerPool.Purge(dockerResource)
 }
 
-func makeRequest(wrapped bool, status int, t *testing.T) []byte {
+func makeRequest(wrapped bool, additionalURI string, status int, t *testing.T) []byte {
 	uri := httpURI
 	if wrapped {
 		uri = httpURI2
 	}
 
-	req, err := http.NewRequest("GET", "http://localhost:"+httpPort+uri, bytes.NewReader([]byte(``)))
+	req, err := http.NewRequest("GET", "http://localhost:"+httpPort+uri+additionalURI, bytes.NewReader([]byte(``)))
 	if err != nil {
 		t.Fatalf("failed to make a request")
 	}
