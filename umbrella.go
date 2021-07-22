@@ -3,11 +3,15 @@ package umbrella
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/gen64/go-crud"
+	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Umbrella struct {
@@ -100,9 +104,38 @@ func (u Umbrella) getURIFromRequest(r *http.Request, uri string) string {
 }
 
 func (u Umbrella) handleRegister(w http.ResponseWriter, r *http.Request) {
-	u.writeOK(w, http.StatusOK, map[string]interface{}{
-		"page": "register",
-	})
+	if r.Method != http.MethodPost {
+		u.writeErrText(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	email := r.FormValue("email")
+	password := r.FormValue("password")
+	if !u.isValidEmail(email) {
+		u.writeErrText(w, http.StatusBadRequest, "invalid_email")
+		return
+	}
+	if !u.isValidPassword(password) {
+		u.writeErrText(w, http.StatusBadRequest, "invalid_or_weak_password")
+		return
+	}
+
+	ok, err := u.isEmailExists(email)
+	if err != nil {
+		u.writeErrText(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if ok {
+		u.writeErrText(w, http.StatusOK, "email_registered")
+		return
+	}
+
+	_, err2 := u.createUser(email, password)
+	if err2 != nil {
+		u.writeErrText(w, http.StatusInternalServerError, "create_error")
+		return
+	}
+
+	u.writeOK(w, http.StatusCreated, map[string]interface{}{})
 }
 
 func (u Umbrella) handleConfirm(w http.ResponseWriter, r *http.Request) {
@@ -146,4 +179,56 @@ func (u Umbrella) writeOK(w http.ResponseWriter, status int, data map[string]int
 	if err == nil {
 		w.Write(j)
 	}
+}
+
+func (u Umbrella) isValidEmail(s string) bool {
+	var emailRegex = regexp.MustCompile("^[a-zA-Z0-9.!#$%&'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$")
+	return emailRegex.MatchString(s)
+}
+
+func (u Umbrella) isValidPassword(s string) bool {
+	if len(s) < 12 {
+		return false
+	}
+	return true
+}
+
+func (u Umbrella) isEmailExists(e string) (bool, *crud.ErrController) {
+	users, err := u.goCRUDController.GetFromDB(func() interface{} { return &User{} }, []string{"id", "asc"}, 1, 0, map[string]interface{}{
+		"Email": e,
+	})
+	if err != nil {
+		return false, err
+	}
+	if len(users) > 0 {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (u Umbrella) createUser(email string, pass string) (string, *ErrUmbrella) {
+	passEncrypted, err := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
+	if err != nil {
+		return "", &ErrUmbrella{
+			Op:  "GeneratePassword",
+			Err: err,
+		}
+	}
+
+	key := uuid.New().String()
+
+	user := &User{}
+	user.Email = email
+	user.Password = base64.StdEncoding.EncodeToString(passEncrypted)
+	user.EmailActivationKey = key
+
+	err = u.goCRUDController.SaveToDB(user)
+	if err != nil {
+		return "", &ErrUmbrella{
+			Op:  "SaveToDB",
+			Err: err,
+		}
+	}
+
+	return key, nil
 }

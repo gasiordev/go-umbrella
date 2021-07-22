@@ -1,7 +1,6 @@
 package umbrella
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,15 +102,18 @@ func removeDocker() {
 	dockerPool.Purge(dockerResource)
 }
 
-func makeRequest(wrapped bool, additionalURI string, status int, t *testing.T) []byte {
+func makeRequest(method string, wrapped bool, additionalURI string, data string, status int, t *testing.T) []byte {
 	uri := httpURI
 	if wrapped {
 		uri = httpURI2
 	}
 
-	req, err := http.NewRequest("GET", "http://localhost:"+httpPort+uri+additionalURI, bytes.NewReader([]byte(``)))
+	req, err := http.NewRequest(method, "http://localhost:"+httpPort+uri+additionalURI, strings.NewReader(data))
 	if err != nil {
 		t.Fatalf("failed to make a request")
+	}
+	if method == "POST" {
+		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 	}
 
 	c := &http.Client{}
