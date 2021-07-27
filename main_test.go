@@ -121,14 +121,22 @@ func makeRequest(method string, wrapped bool, additionalURI string, data string,
 	if err != nil {
 		t.Fatalf("failed to make a request")
 	}
-	if resp.StatusCode != status {
-		t.Fatalf("request returned wrong status code, wanted %d, got %d", status, resp.StatusCode)
-	}
-
 	b, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("failed to read response body")
 	}
+	if resp.StatusCode != status {
+		t.Fatalf("request returned wrong status code, wanted %d, got %d", status, resp.StatusCode)
+	}
+
+
 
 	return b
+}
+
+func getEmailPasswordByEmail(email string) (int64, string, string, error) {
+	var id int64
+	var email2, password string
+	err := dbConn.QueryRow(fmt.Sprintf("SELECT user_id, email, password FROM gen64_users WHERE email = '%s'", email)).Scan(&id, &email2, &password)
+	return id, email2, password, err
 }

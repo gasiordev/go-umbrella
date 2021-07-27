@@ -220,10 +220,12 @@ func (u Umbrella) createUser(email string, pass string) (string, *ErrUmbrella) {
 	user := &User{}
 	user.Email = email
 	user.Password = base64.StdEncoding.EncodeToString(passEncrypted)
+	// TODO: We need to have name in the registration request
+	user.Name = "Unknown"
 	user.EmailActivationKey = key
 
-	err = u.goCRUDController.SaveToDB(user)
-	if err != nil {
+	errCrud := u.goCRUDController.SaveToDB(user)
+	if errCrud != nil {
 		return "", &ErrUmbrella{
 			Op:  "SaveToDB",
 			Err: err,

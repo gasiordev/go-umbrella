@@ -2,9 +2,12 @@ package umbrella
 
 import (
 	"encoding/json"
+	"encoding/base64"
 	"net/http"
 	"net/url"
 	"testing"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestRegisterHTTPHandlerWithInvalidInput(t *testing.T) {
@@ -32,12 +35,16 @@ func TestRegisterHTTPHandlerWithInvalidInput(t *testing.T) {
 	if r.ErrText != "invalid_or_weak_password" {
 		t.Fatalf("POST method on register did not return invalid_or_weak_password")
 	}
+}
 
-	data = url.Values{}
+func TestRegisterHTTPHandlerWithInvalidPassword(t *testing.T) {
+	r := NewHTTPResponse(0, "")
+
+	data := url.Values{}
 	data.Set("email", "code@forthcoming.io")
 	data.Set("password", "weak")
-	b = makeRequest("POST", false, "register", data.Encode(), http.StatusBadRequest, t)
-	err = json.Unmarshal(b, &r)
+	b := makeRequest("POST", false, "register", data.Encode(), http.StatusBadRequest, t)
+	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on register endpoint returned wrong json output, error marshaling: %s", err.Error())
 	}
@@ -46,13 +53,58 @@ func TestRegisterHTTPHandlerWithInvalidInput(t *testing.T) {
 	}
 }
 
-func TestRegisterHTTPHandlerWithInvalidPassword(t *testing.T) {
-}
-
 func TestRegisterHTTPHandlerWithNonExistingEmail(t *testing.T) {
+	r := NewHTTPResponse(0, "")
+
+	data := url.Values{}
+	data.Set("email", "code@forthcoming.io")
+	data.Set("password", "T0ugh3rPassw0rd444!")
+	b := makeRequest("POST", false, "register", data.Encode(), http.StatusCreated, t)
+	err := json.Unmarshal(b, &r)
+	if err != nil {
+		t.Fatalf("POST method on register endpoint returned wrong json output, error marshaling: %s", err.Error())
+	}
+	if r.ErrText != "" {
+		t.Fatalf("POST method on register returned error text")
+	}
+	if r.OK != 1 {
+		t.Fatalf("POST method on register did not return ok for valid input and non-existing email")
+	}
+
+	id, email, password, err := getEmailPasswordByEmail("code@forthcoming.io")
+	if err != nil {
+		t.Fatalf("POST method on register - failed to check if record added in the database")
+	}
+	if id == 0 || email != "code@forthcoming.io" {
+		t.Fatalf("POST method on register failed to add record")
+	}
+	passwordInDBDecoded, err := base64.StdEncoding.DecodeString(password)
+	if err != nil {
+		t.Fatalf("POST method on register - failed to decode the password from the database")
+	}
+	err = bcrypt.CompareHashAndPassword(passwordInDBDecoded, []byte("T0ugh3rPassw0rd444!"))
+	if err != nil {
+		t.Fatalf("POST method on register failed to insert password to the database properly")
+	}
 }
 
 func TestRegisterHTTPHandlerWithExistingEmail(t *testing.T) {
+	r := NewHTTPResponse(0, "")
+
+	data := url.Values{}
+	data.Set("email", "code@forthcoming.io")
+	data.Set("password", "T0ugh3rPassw0rd444!")
+	b := makeRequest("POST", false, "register", data.Encode(), http.StatusOK, t)
+	err := json.Unmarshal(b, &r)
+	if err != nil {
+		t.Fatalf("POST method on register endpoint returned wrong json output, error marshaling: %s", err.Error())
+	}
+	if r.ErrText != "email_registered" {
+		t.Fatalf("POST method on register with existing email did not return email_registered error text")
+	}
+	if r.OK != 0 {
+		t.Fatalf("POST method on register returned ok for valid input and existing email")
+	}
 }
 
 
