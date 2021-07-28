@@ -1,8 +1,8 @@
 package umbrella
 
 import (
-	"encoding/json"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"testing"
@@ -107,16 +107,50 @@ func TestRegisterHTTPHandlerWithExistingEmail(t *testing.T) {
 	}
 }
 
-
 func TestConfirmHTTPHandlerWithInvalidInput(t *testing.T) {
+	r := NewHTTPResponse(0, "")
+
+	data := url.Values{}
+	data.Set("invalidfield1", "somevalue")
+	data.Set("invalidfield2", "somevalue2")
+	b := makeRequest("POST", false, "confirm", data.Encode(), http.StatusBadRequest, t)
+	err := json.Unmarshal(b, &r)
+	if err != nil {
+		t.Fatalf("POST method on confirm endpoint returned wrong json output, error marshaling: %s", err.Error())
+	}
+	if r.ErrText != "invalid_key" {
+		t.Fatalf("POST method on register did not return invalid_key")
+	}
+
+	data = url.Values{}
+	data.Set("key", `%%%(((%%%))))`)
+	b = makeRequest("POST", false, "confirm", data.Encode(), http.StatusBadRequest, t)
+	err = json.Unmarshal(b, &r)
+	if err != nil {
+		t.Fatalf("POST method on confirm endpoint returned wrong json output, error marshaling: %s", err.Error())
+	}
+	if r.ErrText != "invalid_key" {
+		t.Fatalf("POST method on register did not return invalid_key")
+	}
 }
 
 func TestConfirmHTTPHandlerWithValidKey(t *testing.T) {
 }
 
 func TestConfirmHTTPHandlerWithInvalidKey(t *testing.T) {
-}
+	r := NewHTTPResponse(0, "")
 
+	data := url.Values{}
+	data.Set("key", "nonexistingkey")
+	b := makeRequest("POST", false, "confirm", data.Encode(), http.StatusNotFound, t)
+	err := json.Unmarshal(b, &r)
+	if err != nil {
+		t.Fatalf("POST method on confirm endpoint returned wrong json output, error marshaling: %s", err.Error())
+	}
+	if r.ErrText != "invalid_key" {
+		t.Fatalf("POST method on register did not return invalid_key")
+	}
+}
 
 func TestLoginHTTPHandlerWithInvalidInput(t *testing.T) {
 }
@@ -130,7 +164,6 @@ func TestLoginHTTPHandlerWithNonExistingEmail(t *testing.T) {
 func TestLoginHTTPHandlerWithInvalidPassword(t *testing.T) {
 }
 
-
 func TestCheckHTTPHandlerWithInvalidInput(t *testing.T) {
 }
 
@@ -140,7 +173,6 @@ func TestCheckHTTPHandlerWithValidToken(t *testing.T) {
 func TestCheckHTTPHandlerWithInvalidToken(t *testing.T) {
 }
 
-
 func TestLogoutHTTPHandlerWithInvalidInput(t *testing.T) {
 }
 
@@ -149,7 +181,6 @@ func TestLogoutHTTPHandlerWithValidToken(t *testing.T) {
 
 func TestLogoutHTTPHandlerWithInvalidToken(t *testing.T) {
 }
-
 
 func TestHTTPHandlerWrapper(t *testing.T) {
 	b := makeRequest("GET", true, "", "", http.StatusOK, t)

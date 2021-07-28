@@ -8,11 +8,19 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"errors"
 
 	"github.com/gen64/go-crud"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
+
+const FlagUserActive = 1
+const FlagUserEmailConfirmed = 2
+const FlagUserAllowLogin = 4
+
+const FlagSessionActive = 1
+const FlagSessionLoggedOut = 2
 
 type Umbrella struct {
 	dbConn           *sql.DB
@@ -139,9 +147,32 @@ func (u Umbrella) handleRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 func (u Umbrella) handleConfirm(w http.ResponseWriter, r *http.Request) {
-	u.writeOK(w, http.StatusOK, map[string]interface{}{
-		"page": "confirm",
-	})
+	if r.Method != http.MethodPost {
+		u.writeErrText(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	key := r.FormValue("key")
+	if !u.isValidActivationKey(key) {
+		u.writeErrText(w, http.StatusBadRequest, "invalid_key")
+		return
+	}
+
+	err2 := u.confirmEmail(key)
+	if err2 != nil {
+		var errUmb *ErrUmbrella
+		if errors.As(err2, &errUmb) {
+			if errUmb.Op == "NoRow" || errUmb.Op == "UserInactive" {
+				u.writeErrText(w, http.StatusNotFound, "invalid_key")
+			} else if errUmb.Op == "GetFromDB" {
+				u.writeErrText(w, http.StatusInternalServerError, "database_error")
+			} else {
+				u.writeErrText(w, http.StatusInternalServerError, "confirm_error")
+			}
+		}
+		return
+	}
+
+	u.writeOK(w, http.StatusOK, map[string]interface{}{})
 }
 
 func (u Umbrella) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -193,6 +224,11 @@ func (u Umbrella) isValidPassword(s string) bool {
 	return true
 }
 
+func (u Umbrella) isValidActivationKey(s string) bool {
+	var keyRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,255}$`)
+	return keyRegex.MatchString(s)
+}
+
 func (u Umbrella) isEmailExists(e string) (bool, *crud.ErrController) {
 	users, err := u.goCRUDController.GetFromDB(func() interface{} { return &User{} }, []string{"id", "asc"}, 1, 0, map[string]interface{}{
 		"Email": e,
@@ -223,6 +259,7 @@ func (u Umbrella) createUser(email string, pass string) (string, *ErrUmbrella) {
 	// TODO: We need to have name in the registration request
 	user.Name = "Unknown"
 	user.EmailActivationKey = key
+	user.Flags = FlagUserActive
 
 	errCrud := u.goCRUDController.SaveToDB(user)
 	if errCrud != nil {
@@ -233,4 +270,39 @@ func (u Umbrella) createUser(email string, pass string) (string, *ErrUmbrella) {
 	}
 
 	return key, nil
+}
+
+func (u Umbrella) confirmEmail(key string) *ErrUmbrella {
+	users, err := u.goCRUDController.GetFromDB(func() interface{} { return &User{} }, []string{"id", "asc"}, 1, 0, map[string]interface{}{
+		"EmailActivationKey": key,
+	})
+	if err != nil {
+		return &ErrUmbrella{
+			Op:  "GetFromDB",
+			Err: err,
+		}
+	}
+	if len(users) == 0 {
+		return &ErrUmbrella{
+			Op:  "NoRow",
+			Err: err,
+		}
+	}
+	if users[0].(*User).Flags&FlagUserActive == 0 {
+		return &ErrUmbrella{
+			Op:  "UserInactive",
+			Err: err,
+		}
+	}
+
+	users[0].(*User).Flags = users[0].(*User).Flags | FlagUserEmailConfirmed | FlagUserAllowLogin
+	errCrud := u.goCRUDController.SaveToDB(users[0])
+	if errCrud != nil {
+		return &ErrUmbrella{
+			Op:  "SaveToDB",
+			Err: err,
+		}
+	}
+
+	return nil
 }

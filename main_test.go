@@ -126,10 +126,9 @@ func makeRequest(method string, wrapped bool, additionalURI string, data string,
 		t.Fatalf("failed to read response body")
 	}
 	if resp.StatusCode != status {
+		log.Print(string(b))
 		t.Fatalf("request returned wrong status code, wanted %d, got %d", status, resp.StatusCode)
 	}
-
-
 
 	return b
 }
