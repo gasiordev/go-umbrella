@@ -296,6 +296,7 @@ func (u Umbrella) confirmEmail(key string) *ErrUmbrella {
 	}
 
 	users[0].(*User).Flags = users[0].(*User).Flags | FlagUserEmailConfirmed | FlagUserAllowLogin
+	users[0].(*User).EmailActivationKey = ""
 	errCrud := u.goCRUDController.SaveToDB(users[0])
 	if errCrud != nil {
 		return &ErrUmbrella{

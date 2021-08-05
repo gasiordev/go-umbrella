@@ -71,7 +71,7 @@ func TestRegisterHTTPHandlerWithNonExistingEmail(t *testing.T) {
 		t.Fatalf("POST method on register did not return ok for valid input and non-existing email")
 	}
 
-	id, email, password, err := getEmailPasswordByEmail("code@forthcoming.io")
+	id, email, password, _, _, err := getUserByEmail("code@forthcoming.io")
 	if err != nil {
 		t.Fatalf("POST method on register - failed to check if record added in the database")
 	}
@@ -135,6 +135,37 @@ func TestConfirmHTTPHandlerWithInvalidInput(t *testing.T) {
 }
 
 func TestConfirmHTTPHandlerWithValidKey(t *testing.T) {
+	id, _, _, activationKey, _, err := getUserByEmail("code@forthcoming.io")
+	if err != nil {
+		t.Fatalf("POST method on confirm - failed to check if record added in the database")
+	}
+	if id == 0 {
+		t.Fatalf("POST method on confirm - failed to get any record matching email address")
+	}
+
+	r := NewHTTPResponse(0, "")
+
+	data := url.Values{}
+	data.Set("key", activationKey)
+	b := makeRequest("POST", false, "confirm", data.Encode(), http.StatusOK, t)
+	err = json.Unmarshal(b, &r)
+	if err != nil {
+		t.Fatalf("POST method on confirm endpoint returned wrong json output, error marshaling: %s", err.Error())
+	}
+
+	id, _, _, _, flags, err := getUserByEmail("code@forthcoming.io")
+	if err != nil {
+		t.Fatalf("POST method on confirm - failed to check if record added in the database")
+	}
+	if id == 0 {
+		t.Fatalf("POST method on confirm - failed to get any record matching email address")
+	}
+	if flags & FlagUserEmailConfirmed == 0 {
+		t.Fatalf("POST method on confirm - failed to change flag in the database")
+	}
+	if flags & FlagUserAllowLogin == 0 {
+		t.Fatalf("POST method on confirm - failed to change flag in the database")
+	}
 }
 
 func TestConfirmHTTPHandlerWithInvalidKey(t *testing.T) {

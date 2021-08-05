@@ -133,9 +133,9 @@ func makeRequest(method string, wrapped bool, additionalURI string, data string,
 	return b
 }
 
-func getEmailPasswordByEmail(email string) (int64, string, string, error) {
-	var id int64
-	var email2, password string
-	err := dbConn.QueryRow(fmt.Sprintf("SELECT user_id, email, password FROM gen64_users WHERE email = '%s'", email)).Scan(&id, &email2, &password)
-	return id, email2, password, err
+func getUserByEmail(email string) (int64, string, string, string, int64, error) {
+	var id, flags int64
+	var email2, password, activationKey string
+	err := dbConn.QueryRow(fmt.Sprintf("SELECT user_id, email, password, email_activation_key, user_flags FROM gen64_users WHERE email = '%s'", email)).Scan(&id, &email2, &password, &activationKey, &flags)
+	return id, email2, password, activationKey, flags, err
 }
