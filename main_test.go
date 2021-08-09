@@ -31,6 +31,11 @@ var httpCancelCtx context.CancelFunc
 var httpURI = "/v1/umbrella/"
 var httpURI2 = "/v1/restricted_stuff/"
 
+var testEmail = "code@forthcoming.io"
+var testPassword = "T0ugh3rPassw0rd444!"
+
+var sessionToken = ""
+
 var testUmbrella *Umbrella
 
 func TestMain(m *testing.M) {
@@ -66,7 +71,7 @@ func createDocker() {
 }
 
 func createUmbrella() {
-	testUmbrella = NewUmbrella(dbConn, "gen64_")
+	testUmbrella = NewUmbrella(dbConn, "gen64_", "someSecretKey--.", "forthcoming.io", 1)
 	err := testUmbrella.CreateDBTables()
 	if err != nil {
 		log.Fatalf("Failed to create DB tables")
@@ -138,4 +143,11 @@ func getUserByEmail(email string) (int64, string, string, string, int64, error) 
 	var email2, password, activationKey string
 	err := dbConn.QueryRow(fmt.Sprintf("SELECT user_id, email, password, email_activation_key, user_flags FROM gen64_users WHERE email = '%s'", email)).Scan(&id, &email2, &password, &activationKey, &flags)
 	return id, email2, password, activationKey, flags, err
+}
+
+func getSessionByID(id int64) (int64, string, int64, int64, error) {
+	var flags, expiresAt, userID int64
+	var key2 string
+	err := dbConn.QueryRow(fmt.Sprintf("SELECT session_flags, key, expires_at, user_id FROM gen64_sessions WHERE session_id = %d", id)).Scan(&flags, &key2, &expiresAt, &userID)
+	return flags, key2, expiresAt, userID, err
 }

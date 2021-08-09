@@ -5,11 +5,15 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
-	"errors"
+	"time"
 
+	"github.com/dgrijalva/jwt-go"
 	"github.com/gen64/go-crud"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -23,9 +27,12 @@ const FlagSessionActive = 1
 const FlagSessionLoggedOut = 2
 
 type Umbrella struct {
-	dbConn           *sql.DB
-	dbTblPrefix      string
-	goCRUDController *crud.Controller
+	dbConn               *sql.DB
+	dbTblPrefix          string
+	goCRUDController     *crud.Controller
+	jwtKey               string
+	jwtExpirationMinutes int
+	jwtIssuer            string
 }
 
 type User struct {
@@ -42,16 +49,24 @@ type User struct {
 type Session struct {
 	ID        int    `json:"session_id"`
 	Flags     int    `json:"flags"`
-	Key       string `json:"key" crud:"uniq lenmin:32 lenmax:50"`
-	ExpiresAt int    `json:"expires_at"`
+	Key       string `json:"key" crud:"uniq lenmin:32 lenmax:2000"`
+	ExpiresAt int64  `json:"expires_at"`
 	UserID    int    `json:"user_id" crud:"req"`
 }
 
-func NewUmbrella(dbConn *sql.DB, tblPrefix string) *Umbrella {
+type customClaims struct {
+	jwt.StandardClaims
+	SID string
+}
+
+func NewUmbrella(dbConn *sql.DB, tblPrefix string, jwtKey string, jwtIssuer string, jwtExpirationMinutes int) *Umbrella {
 	u := &Umbrella{
-		dbConn:           dbConn,
-		dbTblPrefix:      tblPrefix,
-		goCRUDController: crud.NewController(dbConn, tblPrefix),
+		dbConn:               dbConn,
+		dbTblPrefix:          tblPrefix,
+		goCRUDController:     crud.NewController(dbConn, tblPrefix),
+		jwtKey:               jwtKey,
+		jwtIssuer:            jwtIssuer,
+		jwtExpirationMinutes: jwtExpirationMinutes,
 	}
 	return u
 }
@@ -176,21 +191,107 @@ func (u Umbrella) handleConfirm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (u Umbrella) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		u.writeErrText(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	email := r.FormValue("email")
+	password := r.FormValue("password")
+	if !u.isValidEmail(email) {
+		u.writeErrText(w, http.StatusBadRequest, "invalid_credentials")
+		return
+	}
+	if password == "" {
+		u.writeErrText(w, http.StatusBadRequest, "invalid_credentials")
+		return
+	}
+
+	token, expiresAt, err := u.login(email, password)
+	if err != nil {
+		var errUmb *ErrUmbrella
+		if errors.As(err, &errUmb) {
+			if errUmb.Op == "NoRow" || errUmb.Op == "UserInactive" || errUmb.Op == "InvalidPassword" {
+				u.writeErrText(w, http.StatusNotFound, "invalid_credentials")
+			} else if errUmb.Op == "GetFromDB" {
+				u.writeErrText(w, http.StatusInternalServerError, "database_error")
+			} else {
+				u.writeErrText(w, http.StatusInternalServerError, "login_error")
+			}
+		}
+		return
+	}
+
 	u.writeOK(w, http.StatusOK, map[string]interface{}{
-		"page": "login",
+		"token":      token,
+		"expires_at": expiresAt,
 	})
 }
 
 func (u Umbrella) handleCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		u.writeErrText(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+
+	token := r.FormValue("token")
+	if !u.isValidToken(token) {
+		u.writeErrText(w, http.StatusBadRequest, "invalid_token")
+		return
+	}
+
+	refresh := false
+	if r.FormValue("refresh") == "1" {
+		refresh = true
+	}
+
+	token2, expiresAt, err := u.check(token, refresh)
+	if err != nil {
+		var errUmb *ErrUmbrella
+		if errors.As(err, &errUmb) {
+			if errUmb.Op == "InvalidToken" || errUmb.Op == "UserInactive" || errUmb.Op == "Expired" || errUmb.Op == "InvalidSession" || errUmb.Op == "InvalidUser" || errUmb.Op == "ParseToken" {
+				u.writeErrText(w, http.StatusNotFound, "invalid_credentials")
+			} else if errUmb.Op == "GetFromDB" {
+				u.writeErrText(w, http.StatusInternalServerError, "database_error")
+			} else {
+				u.writeErrText(w, http.StatusInternalServerError, "check_error")
+			}
+		}
+		return
+	}
+
 	u.writeOK(w, http.StatusOK, map[string]interface{}{
-		"page": "check",
+		"token":      token2,
+		"expires_at": expiresAt,
+		"refreshed":  refresh,
 	})
 }
 
 func (u Umbrella) handleLogout(w http.ResponseWriter, r *http.Request) {
-	u.writeOK(w, http.StatusOK, map[string]interface{}{
-		"page": "logout",
-	})
+	if r.Method != http.MethodPost {
+		u.writeErrText(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	token := r.FormValue("token")
+	if token == "" {
+		u.writeErrText(w, http.StatusBadRequest, "invalid_token")
+		return
+	}
+
+	err := u.logout(token)
+	if err != nil {
+		var errUmb *ErrUmbrella
+		if errors.As(err, &errUmb) {
+			if errUmb.Op == "InvalidToken" || errUmb.Op == "Expired" || errUmb.Op == "ParseToken" || errUmb.Op == "InvalidSession" {
+				u.writeErrText(w, http.StatusNotFound, "invalid_credentials")
+			} else if errUmb.Op == "GetFromDB" {
+				u.writeErrText(w, http.StatusInternalServerError, "database_error")
+			} else {
+				u.writeErrText(w, http.StatusInternalServerError, "login_error")
+			}
+		}
+		return
+	}
+	u.writeOK(w, http.StatusOK, map[string]interface{}{})
 }
 
 func (u Umbrella) writeErrText(w http.ResponseWriter, status int, errText string) {
@@ -210,36 +311,6 @@ func (u Umbrella) writeOK(w http.ResponseWriter, status int, data map[string]int
 	if err == nil {
 		w.Write(j)
 	}
-}
-
-func (u Umbrella) isValidEmail(s string) bool {
-	var emailRegex = regexp.MustCompile("^[a-zA-Z0-9.!#$%&'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$")
-	return emailRegex.MatchString(s)
-}
-
-func (u Umbrella) isValidPassword(s string) bool {
-	if len(s) < 12 {
-		return false
-	}
-	return true
-}
-
-func (u Umbrella) isValidActivationKey(s string) bool {
-	var keyRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,255}$`)
-	return keyRegex.MatchString(s)
-}
-
-func (u Umbrella) isEmailExists(e string) (bool, *crud.ErrController) {
-	users, err := u.goCRUDController.GetFromDB(func() interface{} { return &User{} }, []string{"id", "asc"}, 1, 0, map[string]interface{}{
-		"Email": e,
-	})
-	if err != nil {
-		return false, err
-	}
-	if len(users) > 0 {
-		return true, nil
-	}
-	return false, nil
 }
 
 func (u Umbrella) createUser(email string, pass string) (string, *ErrUmbrella) {
@@ -306,4 +377,291 @@ func (u Umbrella) confirmEmail(key string) *ErrUmbrella {
 	}
 
 	return nil
+}
+
+func (u Umbrella) login(email string, password string) (string, int64, *ErrUmbrella) {
+	users, errCrud := u.goCRUDController.GetFromDB(func() interface{} { return &User{} }, []string{"id", "asc"}, 1, 0, map[string]interface{}{
+		"Email": email,
+	})
+	if errCrud != nil {
+		return "", 0, &ErrUmbrella{
+			Op:  "GetFromDB",
+			Err: errCrud,
+		}
+	}
+	if len(users) == 0 {
+		return "", 0, &ErrUmbrella{
+			Op:  "NoRow",
+			Err: errCrud,
+		}
+	}
+	if users[0].(*User).Flags&FlagUserActive == 0 || users[0].(*User).Flags&FlagUserAllowLogin == 0 {
+		return "", 0, &ErrUmbrella{
+			Op:  "UserInactive",
+			Err: errCrud,
+		}
+	}
+
+	passwordInDBDecoded, err := base64.StdEncoding.DecodeString(users[0].(*User).Password)
+	if err != nil {
+		return "", 0, &ErrUmbrella{
+			Op:  "InvalidPassword",
+			Err: err,
+		}
+	}
+	err = bcrypt.CompareHashAndPassword(passwordInDBDecoded, []byte(password))
+	if err != nil {
+		return "", 0, &ErrUmbrella{
+			Op:  "InvalidPassword",
+			Err: err,
+		}
+	}
+
+	sUUID := uuid.New().String()
+	token, expiresAt, err := u.createToken(sUUID)
+	if err != nil {
+		return "", 0, &ErrUmbrella{
+			Op:  "CreateToken",
+			Err: err,
+		}
+	}
+
+	userID := users[0].(*User).ID
+	sess := &Session{
+		Key:       sUUID,
+		ExpiresAt: expiresAt,
+		UserID:    userID,
+		Flags:     FlagSessionActive,
+	}
+	errCrud = u.goCRUDController.SaveToDB(sess)
+	if errCrud != nil {
+		return "", 0, &ErrUmbrella{
+			Op:  "SaveToDB",
+			Err: errCrud,
+		}
+	}
+
+	return token, expiresAt, nil
+}
+
+func (u Umbrella) logout(token string) *ErrUmbrella {
+	sID, errUmbrella := u.parseTokenWithCheck(token)
+	if errUmbrella != nil {
+		return errUmbrella
+	}
+
+	sessions, err := u.goCRUDController.GetFromDB(func() interface{} { return &Session{} }, []string{"id", "asc"}, 1, 0, map[string]interface{}{
+		"Key": sID,
+	})
+	if err != nil {
+		return &ErrUmbrella{
+			Op:  "GetFromDB",
+			Err: err,
+		}
+	}
+	if len(sessions) == 0 {
+		return &ErrUmbrella{
+			Op:  "NoRow",
+			Err: err,
+		}
+	}
+
+	if sessions[0].(*Session).Flags&FlagSessionActive == 0 || sessions[0].(*Session).Flags&FlagSessionLoggedOut > 0 {
+		return &ErrUmbrella{
+			Op:  "InvalidSession",
+			Err: err,
+		}
+	}
+
+	sessions[0].(*Session).Flags = sessions[0].(*Session).Flags | FlagSessionLoggedOut
+	if sessions[0].(*Session).Flags&FlagSessionActive > 0 {
+		sessions[0].(*Session).Flags -= FlagSessionActive
+	}
+	errCrud := u.goCRUDController.SaveToDB(sessions[0])
+	if errCrud != nil {
+		return &ErrUmbrella{
+			Op:  "SaveToDB",
+			Err: err,
+		}
+	}
+
+	return nil
+}
+
+func (u Umbrella) check(token string, refresh bool) (string, int64, *ErrUmbrella) {
+	sID, errUmbrella := u.parseTokenWithCheck(token)
+	if errUmbrella != nil {
+		return "", 0, errUmbrella
+	}
+	sessions, err := u.goCRUDController.GetFromDB(func() interface{} { return &Session{} }, []string{"id", "asc"}, 1, 0, map[string]interface{}{
+		"Key": sID,
+	})
+	if err != nil {
+		return "", 0, &ErrUmbrella{
+			Op:  "GetFromDB",
+			Err: err,
+		}
+	}
+	if len(sessions) == 0 {
+		return "", 0, &ErrUmbrella{
+			Op:  "InvalidSession",
+			Err: err,
+		}
+	}
+	if sessions[0].(*Session).Flags&FlagSessionActive == 0 || sessions[0].(*Session).Flags&FlagSessionLoggedOut > 0 {
+		return "", 0, &ErrUmbrella{
+			Op:  "InvalidSession",
+			Err: err,
+		}
+	}
+
+	user := &User{}
+	errCrud := u.goCRUDController.SetFromDB(user, strconv.Itoa(sessions[0].(*Session).UserID))
+	if errCrud != nil {
+		return "", 0, &ErrUmbrella{
+			Op:  "GetFromDB",
+			Err: errCrud,
+		}
+	}
+	if user.ID == 0 {
+		return "", 0, &ErrUmbrella{
+			Op:  "InvalidUser",
+			Err: errCrud,
+		}
+	}
+	if user.Flags&FlagUserActive == 0 || user.Flags&FlagUserAllowLogin == 0 {
+		return "", 0, &ErrUmbrella{
+			Op:  "UserInactive",
+			Err: errCrud,
+		}
+	}
+
+	if refresh {
+		token2, expiresAt, err := u.createToken(sID)
+		if err != nil {
+			return "", 0, &ErrUmbrella{
+				Op:  "CreateToken",
+				Err: err,
+			}
+		}
+
+		sessions[0].(*Session).ExpiresAt = expiresAt
+		errCrud = u.goCRUDController.SaveToDB(sessions[0])
+		if errCrud != nil {
+			return "", 0, &ErrUmbrella{
+				Op:  "SaveToDB",
+				Err: err,
+			}
+		}
+		return token2, expiresAt, nil
+	}
+
+	return token, 0, nil
+}
+
+func (u Umbrella) parseTokenWithCheck(token string) (string, *ErrUmbrella) {
+	sID, expired, err := u.parseToken(token)
+	if err != nil {
+		return "", &ErrUmbrella{
+			Op:  "ParseToken",
+			Err: err,
+		}
+	}
+
+	if expired {
+		return "", &ErrUmbrella{
+			Op:  "Expired",
+			Err: err,
+		}
+	}
+
+	if !u.isValidSessionID(sID) {
+		return "", &ErrUmbrella{
+			Op:  "InvalidSession",
+			Err: err,
+		}
+	}
+
+	return sID, nil
+}
+
+func (u Umbrella) createToken(sid string) (string, int64, error) {
+	cc := customClaims{
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: time.Now().Add(time.Duration(u.jwtExpirationMinutes) * time.Minute).Unix(),
+			Issuer:    u.jwtIssuer,
+		},
+		SID: sid,
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, cc)
+	st, err := token.SignedString([]byte(u.jwtKey))
+	if err != nil {
+		return "", 0, fmt.Errorf("couldn't sign token in createToken %w", err)
+	}
+	return st, cc.StandardClaims.ExpiresAt, nil
+}
+
+func (u Umbrella) parseToken(st string) (string, bool, error) {
+	token, err := jwt.ParseWithClaims(st, &customClaims{}, func(t *jwt.Token) (interface{}, error) {
+		if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+			return nil, errors.New("parseWithClaims different algorithms used")
+		}
+		return []byte(u.jwtKey), nil
+	})
+
+	if ve, ok := err.(*jwt.ValidationError); ok {
+		if ve.Errors&jwt.ValidationErrorExpired != 0 {
+			return token.Claims.(*customClaims).SID, true, nil
+		}
+	}
+
+	if err != nil {
+		return "", false, fmt.Errorf("couldn't ParseWithClaims in parseToken %w", err)
+	}
+
+	if token.Valid {
+		return token.Claims.(*customClaims).SID, false, nil
+	}
+
+	return "", false, fmt.Errorf("token not valid in parseToken")
+}
+
+func (u Umbrella) isEmailExists(e string) (bool, *crud.ErrController) {
+	users, err := u.goCRUDController.GetFromDB(func() interface{} { return &User{} }, []string{"id", "asc"}, 1, 0, map[string]interface{}{
+		"Email": e,
+	})
+	if err != nil {
+		return false, err
+	}
+	if len(users) > 0 {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (u Umbrella) isValidEmail(s string) bool {
+	var emailRegex = regexp.MustCompile("^[a-zA-Z0-9.!#$%&'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$")
+	return emailRegex.MatchString(s)
+}
+
+func (u Umbrella) isValidPassword(s string) bool {
+	if len(s) < 12 {
+		return false
+	}
+	return true
+}
+
+func (u Umbrella) isValidActivationKey(s string) bool {
+	var keyRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,255}$`)
+	return keyRegex.MatchString(s)
+}
+
+func (u Umbrella) isValidSessionID(s string) bool {
+	var keyRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-\.]{1,255}$`)
+	return keyRegex.MatchString(s)
+}
+
+func (u Umbrella) isValidToken(s string) bool {
+	var keyRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-\.\$]+$`)
+	return keyRegex.MatchString(s)
 }
