@@ -27,12 +27,16 @@ const FlagSessionActive = 1
 const FlagSessionLoggedOut = 2
 
 type Umbrella struct {
-	dbConn               *sql.DB
-	dbTblPrefix          string
-	goCRUDController     *crud.Controller
-	jwtKey               string
-	jwtExpirationMinutes int
-	jwtIssuer            string
+	dbConn           *sql.DB
+	dbTblPrefix      string
+	goCRUDController *crud.Controller
+	jwtConfig        *JWTConfig
+}
+
+type JWTConfig struct {
+	Key               string
+	ExpirationMinutes int
+	Issuer            string
 }
 
 type User struct {
@@ -59,14 +63,12 @@ type customClaims struct {
 	SID string
 }
 
-func NewUmbrella(dbConn *sql.DB, tblPrefix string, jwtKey string, jwtIssuer string, jwtExpirationMinutes int) *Umbrella {
+func NewUmbrella(dbConn *sql.DB, tblPrefix string, jwtConfig *JWTConfig) *Umbrella {
 	u := &Umbrella{
-		dbConn:               dbConn,
-		dbTblPrefix:          tblPrefix,
-		goCRUDController:     crud.NewController(dbConn, tblPrefix),
-		jwtKey:               jwtKey,
-		jwtIssuer:            jwtIssuer,
-		jwtExpirationMinutes: jwtExpirationMinutes,
+		dbConn:           dbConn,
+		dbTblPrefix:      tblPrefix,
+		goCRUDController: crud.NewController(dbConn, tblPrefix),
+		jwtConfig:        jwtConfig,
 	}
 	return u
 }
@@ -588,13 +590,13 @@ func (u Umbrella) parseTokenWithCheck(token string) (string, *ErrUmbrella) {
 func (u Umbrella) createToken(sid string) (string, int64, error) {
 	cc := customClaims{
 		StandardClaims: jwt.StandardClaims{
-			ExpiresAt: time.Now().Add(time.Duration(u.jwtExpirationMinutes) * time.Minute).Unix(),
-			Issuer:    u.jwtIssuer,
+			ExpiresAt: time.Now().Add(time.Duration(u.jwtConfig.ExpirationMinutes) * time.Minute).Unix(),
+			Issuer:    u.jwtConfig.Issuer,
 		},
 		SID: sid,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, cc)
-	st, err := token.SignedString([]byte(u.jwtKey))
+	st, err := token.SignedString([]byte(u.jwtConfig.Key))
 	if err != nil {
 		return "", 0, fmt.Errorf("couldn't sign token in createToken %w", err)
 	}
@@ -606,7 +608,7 @@ func (u Umbrella) parseToken(st string) (string, bool, error) {
 		if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 			return nil, errors.New("parseWithClaims different algorithms used")
 		}
-		return []byte(u.jwtKey), nil
+		return []byte(u.jwtConfig.Key), nil
 	})
 
 	if ve, ok := err.(*jwt.ValidationError); ok {

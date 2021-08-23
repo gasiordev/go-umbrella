@@ -71,7 +71,11 @@ func createDocker() {
 }
 
 func createUmbrella() {
-	testUmbrella = NewUmbrella(dbConn, "gen64_", "someSecretKey--.", "forthcoming.io", 1)
+	testUmbrella = NewUmbrella(dbConn, "gen64_", &JWTConfig{
+		Key:               "someSecretKey--.",
+		Issuer:            "forthcoming.io",
+		ExpirationMinutes: 1,
+	})
 	err := testUmbrella.CreateDBTables()
 	if err != nil {
 		log.Fatalf("Failed to create DB tables")
