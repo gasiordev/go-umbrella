@@ -38,6 +38,8 @@ var sessionToken = ""
 
 var testUmbrella *Umbrella
 
+var testPostRegisterSuccessVariable = false
+
 func TestMain(m *testing.M) {
 	createDocker()
 	createUmbrella()
@@ -75,6 +77,11 @@ func createUmbrella() {
 		Key:               "someSecretKey--.",
 		Issuer:            "forthcoming.io",
 		ExpirationMinutes: 1,
+	}, &Hooks{
+		PostRegisterSuccess: func(w http.ResponseWriter, email string) bool {
+			testPostRegisterSuccessVariable = true
+			return true
+		},
 	})
 	err := testUmbrella.CreateDBTables()
 	if err != nil {

@@ -87,6 +87,10 @@ func TestRegisterHTTPHandlerWithNonExistingEmail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST method on register failed to insert password to the database properly")
 	}
+
+	if testPostRegisterSuccessVariable != true {
+		t.Fatalf("POST method on register failed - post register success hook was not executed")
+	}
 }
 
 func TestRegisterHTTPHandlerWithExistingEmail(t *testing.T) {

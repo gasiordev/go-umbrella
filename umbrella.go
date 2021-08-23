@@ -31,12 +31,22 @@ type Umbrella struct {
 	dbTblPrefix      string
 	goCRUDController *crud.Controller
 	jwtConfig        *JWTConfig
+	hooks            *Hooks
 }
 
 type JWTConfig struct {
 	Key               string
 	ExpirationMinutes int
 	Issuer            string
+}
+
+type Hooks struct {
+	PostRegisterSuccess func(http.ResponseWriter, string) bool
+	PostConfirmSuccess  func(http.ResponseWriter) bool
+	PostLoginSuccess    func(http.ResponseWriter, string, string, int64) bool
+	PostCheckSuccess    func(http.ResponseWriter, string, int64, bool) bool
+	PostLogoutSuccess   func(http.ResponseWriter, string) bool
+	// More to come
 }
 
 type User struct {
@@ -63,12 +73,13 @@ type customClaims struct {
 	SID string
 }
 
-func NewUmbrella(dbConn *sql.DB, tblPrefix string, jwtConfig *JWTConfig) *Umbrella {
+func NewUmbrella(dbConn *sql.DB, tblPrefix string, jwtConfig *JWTConfig, hooks *Hooks) *Umbrella {
 	u := &Umbrella{
 		dbConn:           dbConn,
 		dbTblPrefix:      tblPrefix,
 		goCRUDController: crud.NewController(dbConn, tblPrefix),
 		jwtConfig:        jwtConfig,
+		hooks:            hooks,
 	}
 	return u
 }
@@ -160,6 +171,12 @@ func (u Umbrella) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if u.hooks != nil && u.hooks.PostRegisterSuccess != nil {
+		if !u.hooks.PostRegisterSuccess(w, email) {
+			return
+		}
+	}
+
 	u.writeOK(w, http.StatusCreated, map[string]interface{}{})
 }
 
@@ -187,6 +204,12 @@ func (u Umbrella) handleConfirm(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		return
+	}
+
+	if u.hooks != nil && u.hooks.PostConfirmSuccess != nil {
+		if !u.hooks.PostConfirmSuccess(w) {
+			return
+		}
 	}
 
 	u.writeOK(w, http.StatusOK, map[string]interface{}{})
@@ -221,6 +244,12 @@ func (u Umbrella) handleLogin(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		return
+	}
+
+	if u.hooks != nil && u.hooks.PostLoginSuccess != nil {
+		if !u.hooks.PostLoginSuccess(w, email, token, expiresAt) {
+			return
+		}
 	}
 
 	u.writeOK(w, http.StatusOK, map[string]interface{}{
@@ -261,6 +290,12 @@ func (u Umbrella) handleCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if u.hooks != nil && u.hooks.PostCheckSuccess != nil {
+		if !u.hooks.PostCheckSuccess(w, token, expiresAt, refresh) {
+			return
+		}
+	}
+
 	u.writeOK(w, http.StatusOK, map[string]interface{}{
 		"token":      token2,
 		"expires_at": expiresAt,
@@ -293,6 +328,13 @@ func (u Umbrella) handleLogout(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+
+	if u.hooks != nil && u.hooks.PostLogoutSuccess != nil {
+		if !u.hooks.PostLogoutSuccess(w, token) {
+			return
+		}
+	}
+
 	u.writeOK(w, http.StatusOK, map[string]interface{}{})
 }
 
