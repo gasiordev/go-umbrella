@@ -73,7 +73,7 @@ func createDocker() {
 }
 
 func createUmbrella() {
-	testUmbrella = NewUmbrella(dbConn, "gen64_", &JWTConfig{
+	testUmbrella = NewUmbrellaWithDB(dbConn, "gen64_", &JWTConfig{
 		Key:               "someSecretKey--.",
 		Issuer:            "forthcoming.io",
 		ExpirationMinutes: 1,

@@ -7,9 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +32,7 @@ type Umbrella struct {
 	goCRUDController *crud.Controller
 	jwtConfig        *JWTConfig
 	hooks            *Hooks
+	interfaces       *Interfaces
 }
 
 type JWTConfig struct {
@@ -49,23 +50,9 @@ type Hooks struct {
 	// More to come
 }
 
-type User struct {
-	ID                 int    `json:"user_id"`
-	Flags              int    `json:"flags"`
-	Name               string `json:"name" crud:"req lenmin:2 lenmax:50"`
-	Email              string `json:"email" crud:"req"`
-	Password           string `json:"password"`
-	EmailActivationKey string `json:"email_activation_key" crud:""`
-	CreatedAt          int    `json:"created_at"`
-	CreatedByUserID    int    `json:"created_by_user_id"`
-}
-
-type Session struct {
-	ID        int    `json:"session_id"`
-	Flags     int    `json:"flags"`
-	Key       string `json:"key" crud:"uniq lenmin:32 lenmax:2000"`
-	ExpiresAt int64  `json:"expires_at"`
-	UserID    int    `json:"user_id" crud:"req"`
+type Interfaces struct {
+	User    func() UserInterface
+	Session func() SessionInterface
 }
 
 type customClaims struct {
@@ -73,22 +60,53 @@ type customClaims struct {
 	SID string
 }
 
-func NewUmbrella(dbConn *sql.DB, tblPrefix string, jwtConfig *JWTConfig, hooks *Hooks) *Umbrella {
+func NewUmbrellaWithDB(dbConn *sql.DB, tblPrefix string, jwtConfig *JWTConfig, hooks *Hooks) *Umbrella {
 	u := &Umbrella{
-		dbConn:           dbConn,
-		dbTblPrefix:      tblPrefix,
-		goCRUDController: crud.NewController(dbConn, tblPrefix),
-		jwtConfig:        jwtConfig,
-		hooks:            hooks,
+		dbConn:      dbConn,
+		dbTblPrefix: tblPrefix,
+		jwtConfig:   jwtConfig,
+		hooks:       hooks,
 	}
+
+	if dbConn == nil {
+		log.Fatalf("Umbrella requires DB Connection")
+	}
+
+	u.goCRUDController = crud.NewController(dbConn, tblPrefix)
+
+	u.interfaces = &Interfaces{
+		User: func() UserInterface {
+			user := &User{}
+			return &GoCRUDUser{
+				goCRUDController: u.goCRUDController,
+				user:             user,
+			}
+		},
+		Session: func() SessionInterface {
+			session := &Session{}
+			return &GoCRUDSession{
+				goCRUDController: u.goCRUDController,
+				session:          session,
+			}
+		},
+	}
+
 	return u
 }
 
 func (u Umbrella) CreateDBTables() *ErrUmbrella {
-	user := &User{}
-	session := &Session{}
+	user := u.interfaces.User()
+	session := u.interfaces.Session()
 
-	err := u.goCRUDController.CreateDBTables(user, session)
+	err := user.CreateDBTable()
+	if err != nil {
+		return &ErrUmbrella{
+			Op:  "CreateDBTables",
+			Err: err,
+		}
+	}
+
+	err = session.CreateDBTable()
 	if err != nil {
 		return &ErrUmbrella{
 			Op:  "CreateDBTables",
@@ -368,16 +386,15 @@ func (u Umbrella) createUser(email string, pass string) (string, *ErrUmbrella) {
 
 	key := uuid.New().String()
 
-	user := &User{}
-	user.Email = email
-	user.Password = base64.StdEncoding.EncodeToString(passEncrypted)
-	// TODO: We need to have name in the registration request
-	user.Name = "Unknown"
-	user.EmailActivationKey = key
-	user.Flags = FlagUserActive
+	user := u.interfaces.User()
+	user.SetEmail(email)
+	user.SetPassword(base64.StdEncoding.EncodeToString(passEncrypted))
+	user.SetName("Unknown")
+	user.SetEmailActivationKey(key)
+	user.SetFlags(FlagUserActive)
 
-	errCrud := u.goCRUDController.SaveToDB(user)
-	if errCrud != nil {
+	err = user.Save()
+	if err != nil {
 		return "", &ErrUmbrella{
 			Op:  "SaveToDB",
 			Err: err,
@@ -388,32 +405,34 @@ func (u Umbrella) createUser(email string, pass string) (string, *ErrUmbrella) {
 }
 
 func (u Umbrella) confirmEmail(key string) *ErrUmbrella {
-	users, err := u.goCRUDController.GetFromDB(func() interface{} { return &User{} }, []string{"id", "asc"}, 1, 0, map[string]interface{}{
-		"EmailActivationKey": key,
-	})
-	if err != nil {
-		return &ErrUmbrella{
-			Op:  "GetFromDB",
-			Err: err,
+	user := u.interfaces.User()
+	got, err := user.GetByEmailActivationKey(key)
+
+	if !got {
+		if err == nil {
+			return &ErrUmbrella{
+				Op:  "NoRow",
+				Err: nil,
+			}
+		}
+		if err != nil {
+			return &ErrUmbrella{
+				Op:  "GetFromDB",
+				Err: err,
+			}
 		}
 	}
-	if len(users) == 0 {
-		return &ErrUmbrella{
-			Op:  "NoRow",
-			Err: err,
-		}
-	}
-	if users[0].(*User).Flags&FlagUserActive == 0 {
+	if user.GetFlags()&FlagUserActive == 0 {
 		return &ErrUmbrella{
 			Op:  "UserInactive",
 			Err: err,
 		}
 	}
 
-	users[0].(*User).Flags = users[0].(*User).Flags | FlagUserEmailConfirmed | FlagUserAllowLogin
-	users[0].(*User).EmailActivationKey = ""
-	errCrud := u.goCRUDController.SaveToDB(users[0])
-	if errCrud != nil {
+	user.SetFlags(user.GetFlags() | FlagUserEmailConfirmed | FlagUserAllowLogin)
+	user.SetEmailActivationKey("")
+	err = user.Save()
+	if err != nil {
 		return &ErrUmbrella{
 			Op:  "SaveToDB",
 			Err: err,
@@ -424,29 +443,31 @@ func (u Umbrella) confirmEmail(key string) *ErrUmbrella {
 }
 
 func (u Umbrella) login(email string, password string) (string, int64, *ErrUmbrella) {
-	users, errCrud := u.goCRUDController.GetFromDB(func() interface{} { return &User{} }, []string{"id", "asc"}, 1, 0, map[string]interface{}{
-		"Email": email,
-	})
-	if errCrud != nil {
-		return "", 0, &ErrUmbrella{
-			Op:  "GetFromDB",
-			Err: errCrud,
+	user := u.interfaces.User()
+	got, err := user.GetByEmail(email)
+
+	if !got {
+		if err == nil {
+			return "", 0, &ErrUmbrella{
+				Op:  "NoRow",
+				Err: nil,
+			}
+		}
+		if err != nil {
+			return "", 0, &ErrUmbrella{
+				Op:  "GetFromDB",
+				Err: err,
+			}
 		}
 	}
-	if len(users) == 0 {
-		return "", 0, &ErrUmbrella{
-			Op:  "NoRow",
-			Err: errCrud,
-		}
-	}
-	if users[0].(*User).Flags&FlagUserActive == 0 || users[0].(*User).Flags&FlagUserAllowLogin == 0 {
+	if user.GetFlags()&FlagUserActive == 0 || user.GetFlags()&FlagUserAllowLogin == 0 {
 		return "", 0, &ErrUmbrella{
 			Op:  "UserInactive",
-			Err: errCrud,
+			Err: err,
 		}
 	}
 
-	passwordInDBDecoded, err := base64.StdEncoding.DecodeString(users[0].(*User).Password)
+	passwordInDBDecoded, err := base64.StdEncoding.DecodeString(user.GetPassword())
 	if err != nil {
 		return "", 0, &ErrUmbrella{
 			Op:  "InvalidPassword",
@@ -470,18 +491,18 @@ func (u Umbrella) login(email string, password string) (string, int64, *ErrUmbre
 		}
 	}
 
-	userID := users[0].(*User).ID
-	sess := &Session{
-		Key:       sUUID,
-		ExpiresAt: expiresAt,
-		UserID:    userID,
-		Flags:     FlagSessionActive,
-	}
-	errCrud = u.goCRUDController.SaveToDB(sess)
-	if errCrud != nil {
+	userID := user.GetID()
+
+	sess := u.interfaces.Session()
+	sess.SetKey(sUUID)
+	sess.SetExpiresAt(expiresAt)
+	sess.SetUserID(userID)
+	sess.SetFlags(FlagSessionActive)
+	err = sess.Save()
+	if err != nil {
 		return "", 0, &ErrUmbrella{
 			Op:  "SaveToDB",
-			Err: errCrud,
+			Err: err,
 		}
 	}
 
@@ -494,35 +515,37 @@ func (u Umbrella) logout(token string) *ErrUmbrella {
 		return errUmbrella
 	}
 
-	sessions, err := u.goCRUDController.GetFromDB(func() interface{} { return &Session{} }, []string{"id", "asc"}, 1, 0, map[string]interface{}{
-		"Key": sID,
-	})
-	if err != nil {
-		return &ErrUmbrella{
-			Op:  "GetFromDB",
-			Err: err,
+	session := u.interfaces.Session()
+	got, err := session.GetByKey(sID)
+
+	if !got {
+		if err == nil {
+			return &ErrUmbrella{
+				Op:  "NoRow",
+				Err: nil,
+			}
 		}
-	}
-	if len(sessions) == 0 {
-		return &ErrUmbrella{
-			Op:  "NoRow",
-			Err: err,
+		if err != nil {
+			return &ErrUmbrella{
+				Op:  "GetFromDB",
+				Err: err,
+			}
 		}
 	}
 
-	if sessions[0].(*Session).Flags&FlagSessionActive == 0 || sessions[0].(*Session).Flags&FlagSessionLoggedOut > 0 {
+	if session.GetFlags()&FlagSessionActive == 0 || session.GetFlags()&FlagSessionLoggedOut > 0 {
 		return &ErrUmbrella{
 			Op:  "InvalidSession",
 			Err: err,
 		}
 	}
 
-	sessions[0].(*Session).Flags = sessions[0].(*Session).Flags | FlagSessionLoggedOut
-	if sessions[0].(*Session).Flags&FlagSessionActive > 0 {
-		sessions[0].(*Session).Flags -= FlagSessionActive
+	session.SetFlags(session.GetFlags() | FlagSessionLoggedOut)
+	if session.GetFlags()&FlagSessionActive > 0 {
+		session.SetFlags(session.GetFlags() - FlagSessionActive)
 	}
-	errCrud := u.goCRUDController.SaveToDB(sessions[0])
-	if errCrud != nil {
+	err = session.Save()
+	if err != nil {
 		return &ErrUmbrella{
 			Op:  "SaveToDB",
 			Err: err,
@@ -537,46 +560,51 @@ func (u Umbrella) check(token string, refresh bool) (string, int64, *ErrUmbrella
 	if errUmbrella != nil {
 		return "", 0, errUmbrella
 	}
-	sessions, err := u.goCRUDController.GetFromDB(func() interface{} { return &Session{} }, []string{"id", "asc"}, 1, 0, map[string]interface{}{
-		"Key": sID,
-	})
-	if err != nil {
-		return "", 0, &ErrUmbrella{
-			Op:  "GetFromDB",
-			Err: err,
+
+	session := u.interfaces.Session()
+	got, err := session.GetByKey(sID)
+	if !got {
+		if err == nil {
+			return "", 0, &ErrUmbrella{
+				Op:  "InvalidSession",
+				Err: nil,
+			}
+		}
+		if err != nil {
+			return "", 0, &ErrUmbrella{
+				Op:  "GetFromDB",
+				Err: err,
+			}
 		}
 	}
-	if len(sessions) == 0 {
-		return "", 0, &ErrUmbrella{
-			Op:  "InvalidSession",
-			Err: err,
-		}
-	}
-	if sessions[0].(*Session).Flags&FlagSessionActive == 0 || sessions[0].(*Session).Flags&FlagSessionLoggedOut > 0 {
+
+	if session.GetFlags()&FlagSessionActive == 0 || session.GetFlags()&FlagSessionLoggedOut > 0 {
 		return "", 0, &ErrUmbrella{
 			Op:  "InvalidSession",
 			Err: err,
 		}
 	}
 
-	user := &User{}
-	errCrud := u.goCRUDController.SetFromDB(user, strconv.Itoa(sessions[0].(*Session).UserID))
-	if errCrud != nil {
-		return "", 0, &ErrUmbrella{
-			Op:  "GetFromDB",
-			Err: errCrud,
+	user := u.interfaces.User()
+	got, err = user.GetByID(session.GetUserID())
+	if !got {
+		if err == nil {
+			return "", 0, &ErrUmbrella{
+				Op:  "InvalidUser",
+				Err: err,
+			}
+		}
+		if err != nil {
+			return "", 0, &ErrUmbrella{
+				Op:  "GetFromDB",
+				Err: err,
+			}
 		}
 	}
-	if user.ID == 0 {
-		return "", 0, &ErrUmbrella{
-			Op:  "InvalidUser",
-			Err: errCrud,
-		}
-	}
-	if user.Flags&FlagUserActive == 0 || user.Flags&FlagUserAllowLogin == 0 {
+	if user.GetFlags()&FlagUserActive == 0 || user.GetFlags()&FlagUserAllowLogin == 0 {
 		return "", 0, &ErrUmbrella{
 			Op:  "UserInactive",
-			Err: errCrud,
+			Err: nil,
 		}
 	}
 
@@ -589,9 +617,9 @@ func (u Umbrella) check(token string, refresh bool) (string, int64, *ErrUmbrella
 			}
 		}
 
-		sessions[0].(*Session).ExpiresAt = expiresAt
-		errCrud = u.goCRUDController.SaveToDB(sessions[0])
-		if errCrud != nil {
+		session.SetExpiresAt(expiresAt)
+		err = session.Save()
+		if err != nil {
 			return "", 0, &ErrUmbrella{
 				Op:  "SaveToDB",
 				Err: err,
@@ -670,17 +698,19 @@ func (u Umbrella) parseToken(st string) (string, bool, error) {
 	return "", false, fmt.Errorf("token not valid in parseToken")
 }
 
-func (u Umbrella) isEmailExists(e string) (bool, *crud.ErrController) {
-	users, err := u.goCRUDController.GetFromDB(func() interface{} { return &User{} }, []string{"id", "asc"}, 1, 0, map[string]interface{}{
-		"Email": e,
-	})
-	if err != nil {
-		return false, err
+func (u Umbrella) isEmailExists(e string) (bool, error) {
+	user := u.interfaces.User()
+	got, err := user.GetByEmail(e)
+	if !got {
+		if err == nil {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("Error with GetByEmail: %w", err)
+		}
 	}
-	if len(users) > 0 {
-		return true, nil
-	}
-	return false, nil
+
+	return true, nil
 }
 
 func (u Umbrella) isValidEmail(s string) bool {
