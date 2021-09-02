@@ -9,7 +9,7 @@ import (
 type User struct {
 	ID                 int    `json:"user_id"`
 	Flags              int    `json:"flags"`
-	Name               string `json:"name" crud:"req lenmin:2 lenmax:50"`
+	Name               string `json:"name" crud:"lenmin:0 lenmax:50"`
 	Email              string `json:"email" crud:"req"`
 	Password           string `json:"password"`
 	EmailActivationKey string `json:"email_activation_key" crud:""`
@@ -54,8 +54,11 @@ func (g *GoCRUDUser) GetEmailActivationKey() string {
 func (g *GoCRUDUser) GetFlags() int {
 	return g.user.Flags
 }
-func (g *GoCRUDUser) GetName() string {
-	return g.user.Name
+func (g *GoCRUDUser) GetExtraField(n string) string {
+	if n == "name" {
+		return g.user.Name
+	}
+	return ""
 }
 func (g *GoCRUDUser) SetEmail(e string) {
 	g.user.Email = e
@@ -69,8 +72,10 @@ func (g *GoCRUDUser) SetEmailActivationKey(k string) {
 func (g *GoCRUDUser) SetFlags(flags int) {
 	g.user.Flags = flags
 }
-func (g *GoCRUDUser) SetName(n string) {
-	g.user.Name = n
+func (g *GoCRUDUser) SetExtraField(n string, v string) {
+	if n == "name" {
+		g.user.Name = v
+	}
 }
 func (g *GoCRUDUser) Save() error {
 	errCrud := g.goCRUDController.SaveToDB(g.user)

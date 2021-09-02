@@ -26,13 +26,22 @@ const FlagUserAllowLogin = 4
 const FlagSessionActive = 1
 const FlagSessionLoggedOut = 2
 
+const DisableRegister = 1
+const DisableConfirm = 2
+const DisableLogin = 4
+const DisableCheck = 8
+const RegisterConfirmed = 16
+const RegisterAllowedToLogin = 32
+
 type Umbrella struct {
 	dbConn           *sql.DB
 	dbTblPrefix      string
 	goCRUDController *crud.Controller
 	jwtConfig        *JWTConfig
-	hooks            *Hooks
-	interfaces       *Interfaces
+	Hooks            *Hooks
+	Interfaces       *Interfaces
+	Flags            int
+	UserExtraFields  []UserExtraField
 }
 
 type JWTConfig struct {
@@ -55,17 +64,22 @@ type Interfaces struct {
 	Session func() SessionInterface
 }
 
+type UserExtraField struct {
+	Name         string
+	RegExp       *regexp.Regexp
+	DefaultValue string
+}
+
 type customClaims struct {
 	jwt.StandardClaims
 	SID string
 }
 
-func NewUmbrellaWithDB(dbConn *sql.DB, tblPrefix string, jwtConfig *JWTConfig, hooks *Hooks) *Umbrella {
+func NewUmbrellaWithDB(dbConn *sql.DB, tblPrefix string, jwtConfig *JWTConfig) *Umbrella {
 	u := &Umbrella{
 		dbConn:      dbConn,
 		dbTblPrefix: tblPrefix,
 		jwtConfig:   jwtConfig,
-		hooks:       hooks,
 	}
 
 	if dbConn == nil {
@@ -74,7 +88,7 @@ func NewUmbrellaWithDB(dbConn *sql.DB, tblPrefix string, jwtConfig *JWTConfig, h
 
 	u.goCRUDController = crud.NewController(dbConn, tblPrefix)
 
-	u.interfaces = &Interfaces{
+	u.Interfaces = &Interfaces{
 		User: func() UserInterface {
 			user := &User{}
 			return &GoCRUDUser{
@@ -95,8 +109,8 @@ func NewUmbrellaWithDB(dbConn *sql.DB, tblPrefix string, jwtConfig *JWTConfig, h
 }
 
 func (u Umbrella) CreateDBTables() *ErrUmbrella {
-	user := u.interfaces.User()
-	session := u.interfaces.Session()
+	user := u.Interfaces.User()
+	session := u.Interfaces.Session()
 
 	err := user.CreateDBTable()
 	if err != nil {
@@ -123,15 +137,35 @@ func (u Umbrella) GetHTTPHandler(uri string) http.Handler {
 
 		switch uri {
 		case "register":
-			u.handleRegister(w, r)
+			if u.Flags&DisableRegister > 0 {
+				u.writeErrText(w, http.StatusNotFound, "invalid_uri")
+			} else {
+				u.handleRegister(w, r)
+			}
 		case "confirm":
-			u.handleConfirm(w, r)
+			if u.Flags&DisableConfirm > 0 {
+				u.writeErrText(w, http.StatusNotFound, "invalid_uri")
+			} else {
+				u.handleConfirm(w, r)
+			}
 		case "login":
-			u.handleLogin(w, r)
+			if u.Flags&DisableLogin > 0 {
+				u.writeErrText(w, http.StatusNotFound, "invalid_uri")
+			} else {
+				u.handleLogin(w, r)
+			}
 		case "check":
-			u.handleCheck(w, r)
+			if u.Flags&DisableCheck > 0 {
+				u.writeErrText(w, http.StatusNotFound, "invalid_uri")
+			} else {
+				u.handleCheck(w, r)
+			}
 		case "logout":
-			u.handleLogout(w, r)
+			if u.Flags&DisableLogin > 0 {
+				u.writeErrText(w, http.StatusNotFound, "invalid_uri")
+			} else {
+				u.handleLogout(w, r)
+			}
 		default:
 			u.writeErrText(w, http.StatusNotFound, "invalid_uri")
 		}
@@ -140,14 +174,32 @@ func (u Umbrella) GetHTTPHandler(uri string) http.Handler {
 
 func (u Umbrella) GetHTTPHandlerWrapper(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.WithValue(r.Context(), "UserID", int64(123))
+		token := GetAuthorizationBearerToken(r)
+		_, _, userID, _ := u.check(token, false)
+		ctx := context.WithValue(r.Context(), "UmbrellaUserID", int64(userID))
 		req := r.WithContext(ctx)
 		next.ServeHTTP(w, req)
 	})
 }
 
-func (u Umbrella) GetUserIDFromRequest(r *http.Request) int64 {
-	v := r.Context().Value("UserID").(int64)
+func GetAuthorizationBearerToken(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	if h == "" {
+		return ""
+	}
+	parts := strings.Split(h, "Bearer")
+	if len(parts) != 2 {
+		return ""
+	}
+	token := strings.TrimSpace(parts[1])
+	if len(token) < 1 {
+		return ""
+	}
+	return token
+}
+
+func GetUserIDFromRequest(r *http.Request) int64 {
+	v := r.Context().Value("UmbrellaUserID").(int64)
 	return v
 }
 
@@ -183,14 +235,31 @@ func (u Umbrella) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err2 := u.createUser(email, password)
+	extraFields := map[string]string{}
+	if u.UserExtraFields != nil && len(u.UserExtraFields) > 0 {
+		for _, v := range u.UserExtraFields {
+			postVal := r.FormValue(v.Name)
+			if v.RegExp != nil {
+				if !v.RegExp.MatchString(postVal) {
+					u.writeErrText(w, http.StatusBadRequest, "invalid_"+v.Name)
+					return
+				}
+			}
+			if postVal != "" {
+				postVal = v.DefaultValue
+			}
+			extraFields[v.Name] = postVal
+		}
+	}
+
+	_, err2 := u.createUser(email, password, extraFields)
 	if err2 != nil {
 		u.writeErrText(w, http.StatusInternalServerError, "create_error")
 		return
 	}
 
-	if u.hooks != nil && u.hooks.PostRegisterSuccess != nil {
-		if !u.hooks.PostRegisterSuccess(w, email) {
+	if u.Hooks != nil && u.Hooks.PostRegisterSuccess != nil {
+		if !u.Hooks.PostRegisterSuccess(w, email) {
 			return
 		}
 	}
@@ -224,8 +293,8 @@ func (u Umbrella) handleConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if u.hooks != nil && u.hooks.PostConfirmSuccess != nil {
-		if !u.hooks.PostConfirmSuccess(w) {
+	if u.Hooks != nil && u.Hooks.PostConfirmSuccess != nil {
+		if !u.Hooks.PostConfirmSuccess(w) {
 			return
 		}
 	}
@@ -264,8 +333,8 @@ func (u Umbrella) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if u.hooks != nil && u.hooks.PostLoginSuccess != nil {
-		if !u.hooks.PostLoginSuccess(w, email, token, expiresAt) {
+	if u.Hooks != nil && u.Hooks.PostLoginSuccess != nil {
+		if !u.Hooks.PostLoginSuccess(w, email, token, expiresAt) {
 			return
 		}
 	}
@@ -293,7 +362,7 @@ func (u Umbrella) handleCheck(w http.ResponseWriter, r *http.Request) {
 		refresh = true
 	}
 
-	token2, expiresAt, err := u.check(token, refresh)
+	token2, expiresAt, _, err := u.check(token, refresh)
 	if err != nil {
 		var errUmb *ErrUmbrella
 		if errors.As(err, &errUmb) {
@@ -308,8 +377,8 @@ func (u Umbrella) handleCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if u.hooks != nil && u.hooks.PostCheckSuccess != nil {
-		if !u.hooks.PostCheckSuccess(w, token, expiresAt, refresh) {
+	if u.Hooks != nil && u.Hooks.PostCheckSuccess != nil {
+		if !u.Hooks.PostCheckSuccess(w, token, expiresAt, refresh) {
 			return
 		}
 	}
@@ -347,8 +416,8 @@ func (u Umbrella) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if u.hooks != nil && u.hooks.PostLogoutSuccess != nil {
-		if !u.hooks.PostLogoutSuccess(w, token) {
+	if u.Hooks != nil && u.Hooks.PostLogoutSuccess != nil {
+		if !u.Hooks.PostLogoutSuccess(w, token) {
 			return
 		}
 	}
@@ -375,7 +444,7 @@ func (u Umbrella) writeOK(w http.ResponseWriter, status int, data map[string]int
 	}
 }
 
-func (u Umbrella) createUser(email string, pass string) (string, *ErrUmbrella) {
+func (u Umbrella) createUser(email string, pass string, extraFields map[string]string) (string, *ErrUmbrella) {
 	passEncrypted, err := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
 	if err != nil {
 		return "", &ErrUmbrella{
@@ -386,12 +455,22 @@ func (u Umbrella) createUser(email string, pass string) (string, *ErrUmbrella) {
 
 	key := uuid.New().String()
 
-	user := u.interfaces.User()
+	user := u.Interfaces.User()
 	user.SetEmail(email)
 	user.SetPassword(base64.StdEncoding.EncodeToString(passEncrypted))
-	user.SetName("Unknown")
+	for k, v := range extraFields {
+		user.SetExtraField(k, v)
+	}
 	user.SetEmailActivationKey(key)
-	user.SetFlags(FlagUserActive)
+
+	flags := FlagUserActive
+	if u.Flags&RegisterConfirmed > 0 {
+		flags += FlagUserEmailConfirmed
+	}
+	if u.Flags&RegisterAllowedToLogin > 0 {
+		flags += FlagUserAllowLogin
+	}
+	user.SetFlags(flags)
 
 	err = user.Save()
 	if err != nil {
@@ -405,7 +484,7 @@ func (u Umbrella) createUser(email string, pass string) (string, *ErrUmbrella) {
 }
 
 func (u Umbrella) confirmEmail(key string) *ErrUmbrella {
-	user := u.interfaces.User()
+	user := u.Interfaces.User()
 	got, err := user.GetByEmailActivationKey(key)
 
 	if !got {
@@ -443,7 +522,7 @@ func (u Umbrella) confirmEmail(key string) *ErrUmbrella {
 }
 
 func (u Umbrella) login(email string, password string) (string, int64, *ErrUmbrella) {
-	user := u.interfaces.User()
+	user := u.Interfaces.User()
 	got, err := user.GetByEmail(email)
 
 	if !got {
@@ -493,7 +572,7 @@ func (u Umbrella) login(email string, password string) (string, int64, *ErrUmbre
 
 	userID := user.GetID()
 
-	sess := u.interfaces.Session()
+	sess := u.Interfaces.Session()
 	sess.SetKey(sUUID)
 	sess.SetExpiresAt(expiresAt)
 	sess.SetUserID(userID)
@@ -515,7 +594,7 @@ func (u Umbrella) logout(token string) *ErrUmbrella {
 		return errUmbrella
 	}
 
-	session := u.interfaces.Session()
+	session := u.Interfaces.Session()
 	got, err := session.GetByKey(sID)
 
 	if !got {
@@ -555,23 +634,23 @@ func (u Umbrella) logout(token string) *ErrUmbrella {
 	return nil
 }
 
-func (u Umbrella) check(token string, refresh bool) (string, int64, *ErrUmbrella) {
+func (u Umbrella) check(token string, refresh bool) (string, int64, int, *ErrUmbrella) {
 	sID, errUmbrella := u.parseTokenWithCheck(token)
 	if errUmbrella != nil {
-		return "", 0, errUmbrella
+		return "", 0, 0, errUmbrella
 	}
 
-	session := u.interfaces.Session()
+	session := u.Interfaces.Session()
 	got, err := session.GetByKey(sID)
 	if !got {
 		if err == nil {
-			return "", 0, &ErrUmbrella{
+			return "", 0, 0, &ErrUmbrella{
 				Op:  "InvalidSession",
 				Err: nil,
 			}
 		}
 		if err != nil {
-			return "", 0, &ErrUmbrella{
+			return "", 0, 0, &ErrUmbrella{
 				Op:  "GetFromDB",
 				Err: err,
 			}
@@ -579,30 +658,30 @@ func (u Umbrella) check(token string, refresh bool) (string, int64, *ErrUmbrella
 	}
 
 	if session.GetFlags()&FlagSessionActive == 0 || session.GetFlags()&FlagSessionLoggedOut > 0 {
-		return "", 0, &ErrUmbrella{
+		return "", 0, 0, &ErrUmbrella{
 			Op:  "InvalidSession",
 			Err: err,
 		}
 	}
 
-	user := u.interfaces.User()
+	user := u.Interfaces.User()
 	got, err = user.GetByID(session.GetUserID())
 	if !got {
 		if err == nil {
-			return "", 0, &ErrUmbrella{
+			return "", 0, 0, &ErrUmbrella{
 				Op:  "InvalidUser",
 				Err: err,
 			}
 		}
 		if err != nil {
-			return "", 0, &ErrUmbrella{
+			return "", 0, 0, &ErrUmbrella{
 				Op:  "GetFromDB",
 				Err: err,
 			}
 		}
 	}
 	if user.GetFlags()&FlagUserActive == 0 || user.GetFlags()&FlagUserAllowLogin == 0 {
-		return "", 0, &ErrUmbrella{
+		return "", 0, 0, &ErrUmbrella{
 			Op:  "UserInactive",
 			Err: nil,
 		}
@@ -611,7 +690,7 @@ func (u Umbrella) check(token string, refresh bool) (string, int64, *ErrUmbrella
 	if refresh {
 		token2, expiresAt, err := u.createToken(sID)
 		if err != nil {
-			return "", 0, &ErrUmbrella{
+			return "", 0, 0, &ErrUmbrella{
 				Op:  "CreateToken",
 				Err: err,
 			}
@@ -620,15 +699,15 @@ func (u Umbrella) check(token string, refresh bool) (string, int64, *ErrUmbrella
 		session.SetExpiresAt(expiresAt)
 		err = session.Save()
 		if err != nil {
-			return "", 0, &ErrUmbrella{
+			return "", 0, 0, &ErrUmbrella{
 				Op:  "SaveToDB",
 				Err: err,
 			}
 		}
-		return token2, expiresAt, nil
+		return token2, expiresAt, session.GetUserID(), nil
 	}
 
-	return token, 0, nil
+	return token, 0, session.GetUserID(), nil
 }
 
 func (u Umbrella) parseTokenWithCheck(token string) (string, *ErrUmbrella) {
@@ -699,7 +778,7 @@ func (u Umbrella) parseToken(st string) (string, bool, error) {
 }
 
 func (u Umbrella) isEmailExists(e string) (bool, error) {
-	user := u.interfaces.User()
+	user := u.Interfaces.User()
 	got, err := user.GetByEmail(e)
 	if !got {
 		if err == nil {

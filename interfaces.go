@@ -12,8 +12,8 @@ type UserInterface interface {
 	SetEmailActivationKey(string)
 	GetFlags() int
 	SetFlags(int)
-	GetName() string
-	SetName(string)
+	GetExtraField(n string) string
+	SetExtraField(n string, v string)
 
 	Save() error
 	GetByID(int) (bool, error)

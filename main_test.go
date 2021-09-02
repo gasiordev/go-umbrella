@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -77,12 +76,21 @@ func createUmbrella() {
 		Key:               "someSecretKey--.",
 		Issuer:            "forthcoming.io",
 		ExpirationMinutes: 1,
-	}, &Hooks{
+	})
+	testUmbrella.Hooks = &Hooks{
 		PostRegisterSuccess: func(w http.ResponseWriter, email string) bool {
 			testPostRegisterSuccessVariable = true
 			return true
 		},
-	})
+	}
+	testUmbrella.Flags = 0
+	testUmbrella.UserExtraFields = []UserExtraField{
+		UserExtraField{
+			Name:         "Name",
+			RegExp:       nil,
+			DefaultValue: "Unknown",
+		},
+	}
 	err := testUmbrella.CreateDBTables()
 	if err != nil {
 		log.Fatalf("Failed to create DB tables")
@@ -91,13 +99,14 @@ func createUmbrella() {
 
 func getRestrictedStuffHTTPHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		userID := testUmbrella.GetUserIDFromRequest(r)
+		userID := GetUserIDFromRequest(r)
 		if userID != 0 {
 			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("RestrictedAreaContent"))
 		} else {
 			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte("NoAccess"))
 		}
-		w.Write([]byte(strconv.FormatInt(userID, 10)))
 	})
 }
 
@@ -118,7 +127,7 @@ func removeDocker() {
 	dockerPool.Purge(dockerResource)
 }
 
-func makeRequest(method string, wrapped bool, additionalURI string, data string, status int, t *testing.T) []byte {
+func makeRequest(method string, wrapped bool, additionalURI string, data string, status int, bearerToken string, t *testing.T) []byte {
 	uri := httpURI
 	if wrapped {
 		uri = httpURI2
@@ -130,6 +139,9 @@ func makeRequest(method string, wrapped bool, additionalURI string, data string,
 	}
 	if method == "POST" {
 		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+	}
+	if bearerToken != "" {
+		req.Header.Add("Authorization", "Bearer " + bearerToken)
 	}
 
 	c := &http.Client{}

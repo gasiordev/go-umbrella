@@ -17,7 +17,7 @@ func TestRegisterHTTPHandlerWithInvalidInput(t *testing.T) {
 	data := url.Values{}
 	data.Set("invalidfield1", "somevalue")
 	data.Set("invalidfield2", "somevalue2")
-	b := makeRequest("POST", false, "register", data.Encode(), http.StatusBadRequest, t)
+	b := makeRequest("POST", false, "register", data.Encode(), http.StatusBadRequest, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on register endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -28,7 +28,7 @@ func TestRegisterHTTPHandlerWithInvalidInput(t *testing.T) {
 
 	data = url.Values{}
 	data.Set("email", testEmail)
-	b = makeRequest("POST", false, "register", data.Encode(), http.StatusBadRequest, t)
+	b = makeRequest("POST", false, "register", data.Encode(), http.StatusBadRequest, "", t)
 	err = json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on register endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -44,7 +44,7 @@ func TestRegisterHTTPHandlerWithInvalidPassword(t *testing.T) {
 	data := url.Values{}
 	data.Set("email", testEmail)
 	data.Set("password", "weak")
-	b := makeRequest("POST", false, "register", data.Encode(), http.StatusBadRequest, t)
+	b := makeRequest("POST", false, "register", data.Encode(), http.StatusBadRequest, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on register endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -60,7 +60,7 @@ func TestRegisterHTTPHandlerWithNonExistingEmail(t *testing.T) {
 	data := url.Values{}
 	data.Set("email", testEmail)
 	data.Set("password", testPassword)
-	b := makeRequest("POST", false, "register", data.Encode(), http.StatusCreated, t)
+	b := makeRequest("POST", false, "register", data.Encode(), http.StatusCreated, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on register endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -99,7 +99,7 @@ func TestRegisterHTTPHandlerWithExistingEmail(t *testing.T) {
 	data := url.Values{}
 	data.Set("email", testEmail)
 	data.Set("password", testPassword)
-	b := makeRequest("POST", false, "register", data.Encode(), http.StatusOK, t)
+	b := makeRequest("POST", false, "register", data.Encode(), http.StatusOK, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on register endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -118,7 +118,7 @@ func TestConfirmHTTPHandlerWithInvalidInput(t *testing.T) {
 	data := url.Values{}
 	data.Set("invalidfield1", "somevalue")
 	data.Set("invalidfield2", "somevalue2")
-	b := makeRequest("POST", false, "confirm", data.Encode(), http.StatusBadRequest, t)
+	b := makeRequest("POST", false, "confirm", data.Encode(), http.StatusBadRequest, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on confirm endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -129,7 +129,7 @@ func TestConfirmHTTPHandlerWithInvalidInput(t *testing.T) {
 
 	data = url.Values{}
 	data.Set("key", `%%%(((%%%))))`)
-	b = makeRequest("POST", false, "confirm", data.Encode(), http.StatusBadRequest, t)
+	b = makeRequest("POST", false, "confirm", data.Encode(), http.StatusBadRequest, "", t)
 	err = json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on confirm endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -152,7 +152,7 @@ func TestConfirmHTTPHandlerWithValidKey(t *testing.T) {
 
 	data := url.Values{}
 	data.Set("key", activationKey)
-	b := makeRequest("POST", false, "confirm", data.Encode(), http.StatusOK, t)
+	b := makeRequest("POST", false, "confirm", data.Encode(), http.StatusOK, "", t)
 	err = json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on confirm endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -178,7 +178,7 @@ func TestConfirmHTTPHandlerWithInvalidKey(t *testing.T) {
 
 	data := url.Values{}
 	data.Set("key", "nonexistingkey")
-	b := makeRequest("POST", false, "confirm", data.Encode(), http.StatusNotFound, t)
+	b := makeRequest("POST", false, "confirm", data.Encode(), http.StatusNotFound, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on confirm endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -194,7 +194,7 @@ func TestLoginHTTPHandlerWithInvalidInput(t *testing.T) {
 	data := url.Values{}
 	data.Set("invalidfield1", "somevalue")
 	data.Set("invalidfield2", "somevalue2")
-	b := makeRequest("POST", false, "login", data.Encode(), http.StatusBadRequest, t)
+	b := makeRequest("POST", false, "login", data.Encode(), http.StatusBadRequest, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on login endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -206,7 +206,7 @@ func TestLoginHTTPHandlerWithInvalidInput(t *testing.T) {
 	data = url.Values{}
 	data.Set("email", "somevalue")
 	data.Set("password", "somevalue2")
-	b = makeRequest("POST", false, "login", data.Encode(), http.StatusBadRequest, t)
+	b = makeRequest("POST", false, "login", data.Encode(), http.StatusBadRequest, "", t)
 	err = json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on login endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -217,7 +217,7 @@ func TestLoginHTTPHandlerWithInvalidInput(t *testing.T) {
 
 	data = url.Values{}
 	data.Set("email", testEmail)
-	b = makeRequest("POST", false, "login", data.Encode(), http.StatusBadRequest, t)
+	b = makeRequest("POST", false, "login", data.Encode(), http.StatusBadRequest, "", t)
 	err = json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on login endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -233,7 +233,7 @@ func TestLoginHTTPHandlerWithValidEmailAndPassword(t *testing.T) {
 	data := url.Values{}
 	data.Set("email", testEmail)
 	data.Set("password", testPassword)
-	b := makeRequest("POST", false, "login", data.Encode(), http.StatusOK, t)
+	b := makeRequest("POST", false, "login", data.Encode(), http.StatusOK, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on login endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -269,13 +269,27 @@ func TestLoginHTTPHandlerWithValidEmailAndPassword(t *testing.T) {
 	sessionToken = r.Data["token"].(string)
 }
 
+func TestHTTPHandlerWrapperWithValidToken(t *testing.T) {
+	b := makeRequest("GET", true, "", "", http.StatusOK, sessionToken, t)
+	if string(b) != "RestrictedAreaContent" {
+		t.Fatalf("Invalid output from HTTP request to wrapped endpoint when valid token")
+	}
+}
+
+func TestHTTPHandlerWrapperWithInvalidToken(t *testing.T) {
+	b := makeRequest("GET", true, "", "", http.StatusUnauthorized, "invalidToken", t)
+	if string(b) != "NoAccess" {
+		t.Fatalf("Invalid output from HTTP request to wrapped endpoint when invalid token")
+	}
+}
+
 func TestLoginHTTPHandlerWithNonExistingEmail(t *testing.T) {
 	r := NewHTTPResponse(0, "")
 
 	data := url.Values{}
 	data.Set("email", "nonexisting@example.com")
 	data.Set("password", testPassword)
-	b := makeRequest("POST", false, "login", data.Encode(), http.StatusNotFound, t)
+	b := makeRequest("POST", false, "login", data.Encode(), http.StatusNotFound, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on login endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -291,7 +305,7 @@ func TestLoginHTTPHandlerWithInvalidPassword(t *testing.T) {
 	data := url.Values{}
 	data.Set("email", testEmail)
 	data.Set("password", "invalidPassword!")
-	b := makeRequest("POST", false, "login", data.Encode(), http.StatusNotFound, t)
+	b := makeRequest("POST", false, "login", data.Encode(), http.StatusNotFound, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on login endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -307,7 +321,7 @@ func TestCheckHTTPHandlerWithInvalidInput(t *testing.T) {
 	data := url.Values{}
 	data.Set("invalidfield1", "somevalue")
 	data.Set("invalidfield2", "somevalue2")
-	b := makeRequest("POST", false, "check", data.Encode(), http.StatusBadRequest, t)
+	b := makeRequest("POST", false, "check", data.Encode(), http.StatusBadRequest, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on check endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -322,7 +336,7 @@ func TestCheckHTTPHandlerWithInvalidToken(t *testing.T) {
 
 	data := url.Values{}
 	data.Set("token", "12345678900123456789012345678901234567890123")
-	b := makeRequest("POST", false, "check", data.Encode(), http.StatusNotFound, t)
+	b := makeRequest("POST", false, "check", data.Encode(), http.StatusNotFound, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on check endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -337,7 +351,7 @@ func TestCheckHTTPHandlerWithValidToken(t *testing.T) {
 
 	data := url.Values{}
 	data.Set("token", sessionToken)
-	b := makeRequest("POST", false, "check", data.Encode(), http.StatusOK, t)
+	b := makeRequest("POST", false, "check", data.Encode(), http.StatusOK, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on check endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -364,7 +378,7 @@ func TestCheckHTTPHandlerWithValidTokenWithRefresh(t *testing.T) {
 	data := url.Values{}
 	data.Set("token", sessionToken)
 	data.Set("refresh", "1")
-	b := makeRequest("POST", false, "check", data.Encode(), http.StatusOK, t)
+	b := makeRequest("POST", false, "check", data.Encode(), http.StatusOK, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on check endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -391,7 +405,7 @@ func TestLogoutHTTPHandlerWithInvalidInput(t *testing.T) {
 	data := url.Values{}
 	data.Set("invalidfield1", "somevalue")
 	data.Set("invalidfield2", "somevalue2")
-	b := makeRequest("POST", false, "logout", data.Encode(), http.StatusBadRequest, t)
+	b := makeRequest("POST", false, "logout", data.Encode(), http.StatusBadRequest, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on logout endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -406,7 +420,7 @@ func TestLogoutHTTPHandlerWithValidToken(t *testing.T) {
 
 	data := url.Values{}
 	data.Set("token", sessionToken)
-	b := makeRequest("POST", false, "logout", data.Encode(), http.StatusOK, t)
+	b := makeRequest("POST", false, "logout", data.Encode(), http.StatusOK, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on logout endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -426,7 +440,7 @@ func TestLogoutHTTPHandlerWithInvalidToken(t *testing.T) {
 
 	data := url.Values{}
 	data.Set("token", sessionToken)
-	b := makeRequest("POST", false, "logout", data.Encode(), http.StatusNotFound, t)
+	b := makeRequest("POST", false, "logout", data.Encode(), http.StatusNotFound, "", t)
 	err := json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on logout endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -437,7 +451,7 @@ func TestLogoutHTTPHandlerWithInvalidToken(t *testing.T) {
 
 	data = url.Values{}
 	data.Set("token", "invalidtoken")
-	b = makeRequest("POST", false, "logout", data.Encode(), http.StatusNotFound, t)
+	b = makeRequest("POST", false, "logout", data.Encode(), http.StatusNotFound, "", t)
 	err = json.Unmarshal(b, &r)
 	if err != nil {
 		t.Fatalf("POST method on logout endpoint returned wrong json output, error marshaling: %s", err.Error())
@@ -447,9 +461,9 @@ func TestLogoutHTTPHandlerWithInvalidToken(t *testing.T) {
 	}
 }
 
-func TestHTTPHandlerWrapper(t *testing.T) {
-	b := makeRequest("GET", true, "", "", http.StatusOK, t)
-	if string(b) != "123" {
-		t.Fatalf("Invalid output from HTTP request to wrapped endpoint")
+func TestHTTPHandlerWrapperAfterLogout(t *testing.T) {
+	b := makeRequest("GET", true, "", "", http.StatusUnauthorized, sessionToken, t)
+	if string(b) != "NoAccess" {
+		t.Fatalf("Invalid output from HTTP request to wrapped endpoint after logout")
 	}
 }
